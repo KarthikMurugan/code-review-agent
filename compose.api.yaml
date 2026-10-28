@@ -1,0 +1,28 @@
+# Bootstrap localhost and the tunnel before configuring the GitHub App worker.
+# Uses the same service name and volume as compose.yaml for the later transition.
+services:
+  api:
+    build: .
+    image: learning-review-agent:local
+    ports:
+      - "127.0.0.1:8000:8000"
+    environment:
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?Set GITHUB_WEBHOOK_SECRET}
+      REVIEW_API_TOKEN: ${REVIEW_API_TOKEN:?Set REVIEW_API_TOKEN}
+      REVIEW_DB_PATH: /data/reviews.sqlite3
+    volumes:
+      - review-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+volumes:
+  review-data:

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "learning-review-agent"
+version = "0.1.0"
+description = "A learning-first, three-specialist LangGraph code reviewer"
+requires-python = ">=3.11"
+dependencies = ["langgraph>=1,<2", "langchain>=1,<2", "pydantic>=2,<3",
+                "langchain-openai>=1,<2", "python-dotenv>=1,<2"]
+
+[project.optional-dependencies]
+anthropic = ["langchain-anthropic>=1,<2"]
+dev = ["pytest>=8,<10", "fastapi>=0.115,<1", "httpx>=0.27,<1", "PyJWT[crypto]>=2.9,<3"]
+server = ["fastapi>=0.115,<1", "uvicorn>=0.30,<1", "httpx>=0.27,<1", "PyJWT[crypto]>=2.9,<3"]
+
+[project.scripts]
+review-agent = "review_agent.cli:main"
+review-worker = "review_agent.worker:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/review_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
