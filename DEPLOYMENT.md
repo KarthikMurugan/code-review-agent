@@ -109,7 +109,7 @@ Both processes default to `data/reviews.sqlite3`. For another working directory,
 3. The worker obtains a repository-scoped GitHub App installation token. It checks that the PR remains open, ready, and at the expected base/head revision.
 4. Git fetches the PR head ref and base commit from `github.com` into a disposable bare repository. Credentials are passed through an askpass helper/environment, not URL arguments or stored Git configuration. No checkout, submodules, LFS processing, target programs, or hooks run. Fork PRs use the base repository's PR ref.
 5. The fetch includes 100 commits of history. The reviewer compares the merge-base to the pinned head. If the common ancestor is outside that history, the job fails rather than inventing a diff.
-6. The worker runs three Kimi reviewers with a 180-second deadline each. It persists their aggregate JSON report before publication.
+6. The worker runs three Kimi reviewers concurrently. `REVIEW_TIMEOUT_SECONDS` sets each reviewer's total deadline (default 480 seconds, allowed 1–600). Each provider request has a timeout of min(210 seconds, 45% of the deadline) and at most one SDK retry for transient errors. The output budget is 4,096 tokens and five concise findings per reviewer. The model selects source locations; the adapter extracts exact evidence from the pinned source, rejecting invalid locations. The orchestrator still validates locations and excerpts. The aggregate JSON report is saved before publication.
 7. Before publication, it reconciles existing bot reviews using a stable job marker, checks the PR revision again, and posts a commit-bound COMMENT review. A push racing the final check can still leave an old-commit review; its reviewed SHA remains explicit.
 8. Jobs get up to three attempts, with a pause on errors. Saved reports are reused when retrying publication, avoiding repeated model requests after a saved analysis. A crash before saving a report can repeat model requests. API retries are at-least-once: markers reduce duplicates but do not promise exactly-once behavior under every GitHub consistency/race scenario.
 9. A crashed worker's running job is reclaimable after its 15-minute lease expires. A PR that is no longer current becomes `superseded`. The service does not schedule a new review merely because the base branch advanced; another supported PR event is required.
@@ -129,3 +129,39 @@ Tests use local Git fixtures, synthetic keys, and mocked HTTP responses. They co
 Dependencies for the server image are pinned in `requirements-server.lock`. The Python base image and Debian packages are not digest-pinned. Regenerate the Python lock when dependencies change, then rebuild.
 
 References: [GitHub signature validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries), [App installation tokens](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app), [PR review publication](https://docs.github.com/en/rest/pulls/reviews), [FastAPI containers](https://fastapi.tiangolo.com/deployment/docker/).
+
+## Review diagnostics
+
+```sh
+docker compose logs -f --tail=100 worker api
+```
+
+Worker logs include job IDs, reviewer start/finish events, elapsed seconds,
+error type and stage (`deadline` or `provider`), provider finish reasons and token
+counts, evidence-rejection reason codes, and publication IDs. They omit source
+excerpts, credentials, and raw provider exceptions. A provider timeout can be
+retried once within the total reviewer deadline; this can repeat paid inference.
+A truncated provider response fails explicitly rather than appearing as an empty review.
+
+Full reports remain in `jobs.report` in `/data/reviews.sqlite3` on the shared
+Docker volume. `agents` contains each reviewer's status, elapsed time, error stage,
+and output; `limitations` records rejected findings. The status API intentionally
+does not expose full reports. To inspect the latest saved report locally:
+
+```sh
+docker compose exec -T worker python - <<'PYTHON'
+import json, sqlite3
+with sqlite3.connect('/data/reviews.sqlite3') as db:
+    row = db.execute(
+        'SELECT id, report FROM jobs WHERE report IS NOT NULL ORDER BY created DESC LIMIT 1'
+    ).fetchone()
+if row:
+    print('job:', row[0])
+    print(json.dumps(json.loads(row[1]), indent=2))
+PYTHON
+```
+
+Reports contain private source-derived data; inspect them locally. Redelivering
+an unchanged webhook deduplicates to its existing job and does not rerun models.
+An intentional manual rerun needs a distinct job identity to preserve prior results
+and allow a new bot comment. There is no public rerun endpoint in this version.

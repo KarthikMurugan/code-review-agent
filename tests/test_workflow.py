@@ -42,6 +42,8 @@ def test_failure_and_timeout_do_not_hide_successful_results():
     assert report.status == "partial"
     assert outcomes["security"].error == "RuntimeError"
     assert outcomes["tests"].error == "TimeoutError"
+    assert outcomes["tests"].error_stage == "deadline"
+    assert outcomes["security"].error_stage == "provider"
     assert outcomes["bugs"].status == "completed"
     assert len(report.findings) == 1
     assert "Sensitive" not in report.model_dump_json()
@@ -70,3 +72,21 @@ def test_zero_findings_with_no_limits_is_completed():
     report = asyncio.run(review_repository(sample_snapshot(), EmptyReviewer()))
     assert report.status == "completed"
     assert report.findings == []
+
+
+def test_reviewer_failures_and_validation_rejections_are_logged_without_payload(caplog):
+    class BrokenReviewer(DemoReviewer):
+        async def review(self, role, snapshot):
+            if role == 'security':
+                raise TimeoutError('PRIVATE PROVIDER REQUEST')
+            result = await super().review(role, snapshot)
+            if role == 'tests':
+                result.findings[0].evidence = 'PRIVATE GENERATED CODE'
+            return result
+
+    with caplog.at_level('INFO'):
+        report = asyncio.run(review_repository(sample_snapshot(), BrokenReviewer()))
+    assert 'role=security' in caplog.text and 'TimeoutError' in caplog.text
+    assert 'evidence_mismatch' in caplog.text
+    assert 'PRIVATE' not in caplog.text
+    assert all(agent.elapsed_seconds is not None for agent in report.agents)

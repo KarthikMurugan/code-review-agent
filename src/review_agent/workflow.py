@@ -1,11 +1,15 @@
 import asyncio
 import operator
+import logging
+import time
 from typing import Annotated, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
 from .models import AcceptedFinding, AgentResult, Report, ROLES, Role, SEVERITY_ORDER, Snapshot
 from .reviewers import Reviewer
+
+LOG = logging.getLogger(__name__)
 
 
 class State(TypedDict):
@@ -24,13 +28,17 @@ def combine(snapshot: Snapshot, results: list[AgentResult], mode: str) -> Report
         limitations.extend(f"{result.role}: {note}" for note in result.output.limitations)
         if result.status == "failed":
             limitations.append(f"{result.role}: review failed ({result.error})")
-        for finding in result.output.findings:
+        for index, finding in enumerate(result.output.findings):
             file = files.get(finding.path)
             lines = file.content.splitlines() if file else []
             excerpt = "\n".join(lines[finding.start_line - 1:finding.end_line])
-            if (not file or finding.end_line > len(lines) or
-                    not finding.evidence.strip() or finding.evidence not in excerpt):
+            reason = ("unknown_file" if file is None else
+                      "out_of_range" if finding.end_line > len(lines) else
+                      "empty_excerpt" if not finding.evidence.strip() else
+                      "evidence_mismatch" if finding.evidence not in excerpt else None)
+            if reason:
                 invalid = True
+                LOG.warning("finding_rejected role=%s index=%d reason=%s", result.role, index, reason)
                 limitations.append(f"Rejected {result.role} finding '{finding.title}': invalid location or excerpt")
                 continue
             # Exact duplicates only. Different titles/roles remain for human adjudication.
@@ -59,12 +67,22 @@ def build_graph(reviewer: Reviewer, *, timeout: float = 90, mode: str = "live"):
 
     def specialist(role: Role):
         async def run(state: State):
+            started = time.monotonic()
+            deadline = asyncio.timeout(timeout)
+            LOG.info("reviewer_started role=%s deadline_seconds=%s", role, timeout)
             try:
-                output = await asyncio.wait_for(reviewer.review(role, state["snapshot"]), timeout)
+                async with deadline:
+                    output = await reviewer.review(role, state["snapshot"])
                 result = AgentResult(role=role, status="completed", output=output)
             except Exception as exc:
                 # Exception text from providers can contain request data; retain only the type.
-                result = AgentResult(role=role, status="failed", error=type(exc).__name__)
+                result = AgentResult(role=role, status="failed", error=type(exc).__name__,
+                                     error_stage="deadline" if deadline.expired() else "provider")
+            result.elapsed_seconds = round(time.monotonic() - started, 3)
+            LOG.log(logging.WARNING if result.status == "failed" else logging.INFO,
+                    "reviewer_finished role=%s status=%s elapsed_seconds=%.3f error=%s stage=%s findings=%d",
+                    role, result.status, result.elapsed_seconds, result.error or "none",
+                    result.error_stage or "none", len(result.output.findings))
             return {"results": [result]}
         return run
 

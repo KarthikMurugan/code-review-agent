@@ -32,6 +32,7 @@ services:
       NEBIUS_API_KEY: ${NEBIUS_API_KEY:?Set NEBIUS_API_KEY}
       NEBIUS_BASE_URL: ${NEBIUS_BASE_URL:-https://api.tokenfactory.nebius.com/v1}
       REVIEW_MODEL: ${REVIEW_MODEL:-nebius:moonshotai/Kimi-K2.7-Code}
+      REVIEW_TIMEOUT_SECONDS: ${REVIEW_TIMEOUT_SECONDS:-480}
       REVIEW_DB_PATH: /data/reviews.sqlite3
     secrets:
       - source: github-app-key

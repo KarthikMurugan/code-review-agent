@@ -6,7 +6,7 @@ from pathlib import Path
 
 import httpx
 
-from .config import DEFAULT_MODEL, load_environment
+from .config import DEFAULT_MODEL, load_environment, request_timeout, review_timeout
 from .github import GitHub, Superseded, fetch_snapshot
 from .jobs import JobStore
 from .models import Report, ROLES, AgentResult
@@ -18,6 +18,7 @@ LOG = logging.getLogger("review-worker")
 
 async def process_job(store: JobStore, job: dict):
     payload = job["payload"]
+    LOG.info("job_started job=%s pr=%s head=%s", job["id"], payload["number"], payload["head_sha"])
     async with httpx.AsyncClient(base_url="https://api.github.com", timeout=30,
                                 headers={"Accept": "application/vnd.github+json",
                                          "X-GitHub-Api-Version": "2026-03-10"}) as client:
@@ -35,8 +36,10 @@ async def process_job(store: JobStore, job: dict):
             with tempfile.TemporaryDirectory(prefix="review-job-") as directory:
                 snapshot = await asyncio.to_thread(fetch_snapshot, Path(directory) / "repository.git", payload, github.token)
                 if snapshot.files:
-                    reviewer = ModelReviewer(os.environ.get("REVIEW_MODEL", DEFAULT_MODEL), timeout=180)
-                    report = await review_repository(snapshot, reviewer, timeout=180)
+                    deadline = review_timeout()
+                    reviewer = ModelReviewer(os.environ.get("REVIEW_MODEL", DEFAULT_MODEL),
+                                             timeout=request_timeout(deadline))
+                    report = await review_repository(snapshot, reviewer, timeout=deadline)
                 else:
                     report = Report(mode="live", base_sha=snapshot.base_sha, head_sha=snapshot.head_sha,
                                     status="partial", agents=[AgentResult(role=role, status="failed", error="NoSupportedFiles")
@@ -44,10 +47,13 @@ async def process_job(store: JobStore, job: dict):
             store.save_report(job["id"], report.model_dump_json())
         review_id = await github.publish(payload, job["id"], report)
         store.finish(job["id"], "completed", review_id)
+        LOG.info("job_published job=%s review_id=%s analysis=%s findings=%d",
+                 job["id"], review_id, report.status, len(report.findings))
 
 
 async def run_worker():
     load_environment()
+    review_timeout()  # Fail invalid configuration before claiming any work.
     for name in ("GITHUB_APP_ID", "GITHUB_PRIVATE_KEY_FILE", "NEBIUS_API_KEY"):
         if not os.environ.get(name):
             raise ValueError(f"Missing required worker configuration: {name}")
@@ -69,6 +75,8 @@ async def run_worker():
 
 def main():
     logging.basicConfig(level=logging.WARNING)
+    LOG.setLevel(logging.INFO)
+    logging.getLogger("review_agent").setLevel(logging.INFO)
     asyncio.run(run_worker())
 
 

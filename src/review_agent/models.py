@@ -8,7 +8,7 @@ ROLES: tuple[Role, ...] = ("bugs", "security", "tests")
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3}
 
 
-class Finding(BaseModel):
+class FindingLocation(BaseModel):
     model_config = ConfigDict(extra="forbid")
     title: str = Field(min_length=1)
     path: str = Field(min_length=1)
@@ -18,7 +18,6 @@ class Finding(BaseModel):
     confidence: Literal["high", "medium", "low"]
     explanation: str = Field(min_length=1)
     trigger: str = Field(min_length=1)
-    evidence: str = Field(min_length=1, description="Exact, nonempty code excerpt from the head file at the cited line range")
     suggested_fix: str = Field(min_length=1)
     suggested_test: str = Field(min_length=1)
 
@@ -27,6 +26,18 @@ class Finding(BaseModel):
         if self.end_line < self.start_line:
             raise ValueError("end_line must be >= start_line")
         return self
+
+
+class Finding(FindingLocation):
+    evidence: str = Field(min_length=1, description="Exact, nonempty code excerpt from the head file at the cited line range")
+
+
+class ReviewDraft(BaseModel):
+    """Model contract: select locations; the application extracts source evidence."""
+
+    model_config = ConfigDict(extra="forbid")
+    findings: list[FindingLocation] = Field(default_factory=list, max_length=5)
+    limitations: list[str] = Field(default_factory=list)
 
 
 class ReviewOutput(BaseModel):
@@ -55,6 +66,8 @@ class AgentResult(BaseModel):
     status: Literal["completed", "failed"]
     output: ReviewOutput = Field(default_factory=ReviewOutput)
     error: str | None = None
+    error_stage: Literal["deadline", "provider"] | None = None
+    elapsed_seconds: float | None = Field(default=None, ge=0)
 
 
 class AcceptedFinding(BaseModel):

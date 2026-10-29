@@ -38,7 +38,7 @@ flowchart TD
 
 `State.results` uses an append reducer so parallel nodes do not overwrite one another. A list-valued join edge waits for all three outcomes. Each specialist has a deadline; failures become explicit failed outcomes so the other reviews can still produce a partial report.
 
-The first version uses one structured model call per specialist. These are fixed reviewer nodes, not autonomous tool-using agents yet. The orchestrator checks that cited head-file locations exist and evidence excerpts match. It removes exact duplicates within a specialist, then sorts by severity and confidence. It does **not** prove claims, verify whether an issue was introduced, reconcile semantic duplicates, or independently validate severity. The prompts request those judgments from specialists; humans still need to inspect them.
+Each specialist makes one logical structured-output request, with at most one SDK retry for transient errors. These are fixed reviewer nodes, not autonomous tool-using agents yet. The model returns locations rather than copied code. The adapter extracts evidence from the pinned source at those locations, rejecting unknown files, invalid ranges, and blank excerpts. The orchestrator independently checks that the resulting locations exist and evidence excerpts match. It removes exact duplicates within a specialist, then sorts by severity and confidence. It does **not** prove claims, verify whether an issue was introduced, reconcile semantic duplicates, or independently validate severity. The prompts request those judgments from specialists; humans still need to inspect them.
 
 ## 3. Review committed changes with Nebius Kimi K2.7 Code
 
@@ -61,7 +61,7 @@ REVIEW_MODEL=nebius:moonshotai/Kimi-K2.7-Code
 NEBIUS_BASE_URL=https://api.tokenfactory.nebius.com/v1
 ```
 
-The adapter uses Chat Completions and function-calling structured output, with 8,192 output tokens and no automatic request retries. The CLI deadline is 180 seconds per specialist. The output budget includes reasoning where the provider counts it; long reviews can still exhaust it. Hosted-model access and response compatibility need a live call to confirm. No inference request is made during configuration or the offline demo.
+The adapter uses Chat Completions and function-calling structured output with a location-only `ReviewDraft` schema, up to five findings, and 4,096 output tokens. The CLI deadline is 480 seconds per specialist, including at most one SDK retry for transient errors. Each provider request is capped at min(210 seconds, 45% of the total deadline). The output budget includes reasoning where the provider counts it; long reviews can still exhaust it. Hosted-model access and response compatibility need a live call to confirm. No inference request is made during configuration or the offline demo.
 
 This is a single-turn adapter. Nonstandard reasoning history is not preserved; a future multi-turn Kimi tool loop will need provider-specific reasoning-history handling.
 

@@ -6,7 +6,7 @@ from pathlib import Path
 import sys
 
 from .demo import sample_snapshot
-from .config import DEFAULT_MODEL, load_environment
+from .config import DEFAULT_MODEL, DEFAULT_REVIEW_TIMEOUT, load_environment, request_timeout
 from .reporting import markdown
 from .reviewers import DemoReviewer, ModelReviewer
 from .snapshot import capture
@@ -21,7 +21,8 @@ def main() -> int:
     parser.add_argument("--head", default="HEAD", help="Head commit or ref (default: HEAD)")
     parser.add_argument("--model", help=f"provider:model identifier (default: {DEFAULT_MODEL})")
     parser.add_argument("--env-file", type=Path, help="Explicit .env path; defaults to the editable project .env")
-    parser.add_argument("--timeout", type=float, default=180, help="Seconds per specialist (default: 180)")
+    parser.add_argument("--timeout", type=float, default=DEFAULT_REVIEW_TIMEOUT,
+                        help=f"Total seconds per specialist, including retry (default: {DEFAULT_REVIEW_TIMEOUT})")
     parser.add_argument("--out", type=Path, required=True, help="Directory for report.json and report.md")
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
@@ -40,7 +41,7 @@ def main() -> int:
                 print(note, file=sys.stderr)
             return 2
         model = args.model or os.environ.get("REVIEW_MODEL", DEFAULT_MODEL)
-        reviewer = DemoReviewer() if args.demo else ModelReviewer(model, args.timeout)
+        reviewer = DemoReviewer() if args.demo else ModelReviewer(model, request_timeout(args.timeout))
         mode = "demo" if args.demo else "live"
         report = asyncio.run(review_repository(snapshot, reviewer, timeout=args.timeout, mode=mode))
         args.out.mkdir(parents=True, exist_ok=True)
